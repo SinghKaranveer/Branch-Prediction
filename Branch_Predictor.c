@@ -6,10 +6,12 @@ const unsigned instShiftAmt = 2; // Number of bits to shift a PC by
 const unsigned localPredictorSize = 2048;
 const unsigned localCounterBits = 2;
 const unsigned localHistoryTableSize = 2048; 
-const unsigned globalPredictorSize = 8192*4 ;
+const unsigned globalPredictorSize = 16384;
 const unsigned globalCounterBits = 2;
-const unsigned choicePredictorSize = 65536; // Keep this the same as globalPredictorSize.
+const unsigned choicePredictorSize = 4096; // Keep this the same as globalPredictorSize.
 const unsigned choiceCounterBits = 2;
+const unsigned perceptronGHRLength = 12;
+//float theta = (1.93 * perceptronGHRLength) + 14;
 
 Branch_Predictor *initBranchPredictor()
 {
@@ -35,6 +37,7 @@ Branch_Predictor *initBranchPredictor()
 
     #ifdef GSHARE
 
+    //branch_predictor->index_mask = branch_predictor->local_predictor_sets - 1;
     branch_predictor->global_predictor_size = globalPredictorSize;
 
     // Initialize sat counters
@@ -51,6 +54,27 @@ Branch_Predictor *initBranchPredictor()
     branch_predictor->global_history_mask = globalPredictorSize - 1;
     branch_predictor->global_history = 0;
     
+    #endif
+
+    #ifdef PERCEPTRON
+    branch_predictor->global_predictor_size =globalPredictorSize;
+
+    // Initialize perceptrons
+
+    branch_predictor->perceptron_table = 
+        (Perceptron *)malloc(globalPredictorSize * sizeof(Perceptron));
+
+    int i = 0;
+    for (i = 0; i < globalPredictorSize; i++)
+    {
+        initPerceptron(&(branch_predictor->perceptron_table[i]));
+    }
+
+
+
+    branch_predictor->global_history_mask = globalPredictorSize - 1;
+
+    branch_predictor->global_history = 0;
     #endif
 
     #ifdef TOURNAMENT
@@ -180,7 +204,13 @@ bool predict(Branch_Predictor *branch_predictor, Instruction *instr)
     uint64_t branch_address_masked = branch_address & branch_predictor->global_history_mask;
     uint64_t table_index = branch_address_masked ^ global_masked;
     
+    //printf("global_history=%u\n", branch_predictor->global_history);
+    //printf("GOT HERE\n");
+    //printf("branch_address= %u\n", branch_address);
+    //printf("global_masked= %u\n", global_masked);
+    //printf("table_index= %u\n", table_index);
     bool final_prediction = getPrediction(&(branch_predictor->global_counters[table_index]));
+    //printf("GOT HERE\n");
     bool prediction_correct = final_prediction == instr->taken;
     if (instr->taken)
     {
@@ -195,6 +225,53 @@ bool predict(Branch_Predictor *branch_predictor, Instruction *instr)
     branch_predictor->global_history = branch_predictor->global_history << 1 | instr->taken;
     
     return prediction_correct;
+    #endif
+
+    #ifdef PERCEPTRON
+    bool prediction;
+    //uint64_t global_masked =
+    //    branch_predictor->global_history & branch_predictor->global_history_mask;
+    //uint64_t branch_address_masked = branch_address & branch_predictor->global_history_mask;
+    //uint64_t table_index = branch_address_masked ^ global_masked;
+
+    unsigned table_index = getIndex(branch_address,
+                                    branch_predictor->global_history_mask);
+
+    //compute_perceptron(&(branch_predictor->perceptron_table[table_index]));
+    float y = branch_predictor->perceptron_table[table_index].global_history_table[0];
+    int i;
+
+    for(i=1; i < perceptronGHRLength; i++)
+    {
+        y += branch_predictor->perceptron_table[table_index].global_history_table[i] * branch_predictor->perceptron_table[table_index].weight[i];
+    }
+
+    if (y < 0)
+    {
+        prediction = 0;
+    }
+    else
+    {
+        prediction = 1;
+    }
+
+    float theta = (1.93 * perceptronGHRLength) + 14;
+    train_perceptron(&(branch_predictor->perceptron_table[table_index]), instr->taken, theta, y);
+
+    for (i = perceptronGHRLength - 2; i >= 0; i--)
+    {
+        branch_predictor->perceptron_table[table_index].global_history_table[i+1] = 
+            branch_predictor->perceptron_table[table_index].global_history_table[i];
+    }
+    if(instr->taken)
+    {
+    	branch_predictor->perceptron_table[table_index].global_history_table[0] = 1;
+    }
+    else
+    {
+    	branch_predictor->perceptron_table[table_index].global_history_table[0] = -1;
+    }
+    return prediction == instr->taken;
     #endif
 
     #ifdef TOURNAMENT
@@ -287,6 +364,42 @@ inline bool getPrediction(Sat_Counter *sat_counter)
 
     // MSB determins the direction
     return (counter >> (counter_bits - 1));
+}
+
+// perceptron functions
+inline void initPerceptron(Perceptron *perceptron)
+{
+    signed int *zero_array1 = malloc(perceptronGHRLength * sizeof(signed int));
+    signed int *zero_array2 = malloc(perceptronGHRLength * sizeof(signed int));
+    int i = 0;
+    for (i = 0; i < perceptronGHRLength; i++)
+    {
+        zero_array1[i] = 1;
+        zero_array2[i] = 1;
+    }
+    perceptron->global_history_table = zero_array1;
+    perceptron->weight = zero_array2;
+    perceptron->y_out = 0;
+}
+
+inline void train_perceptron(Perceptron* perceptron, bool taken, float theta, float y)
+{
+    int i = 0;
+    if (((y < 0) == taken) || (abs(y) <= theta))
+    {
+	
+        for (i = 0; i < perceptronGHRLength; i++)
+        {
+            if (taken)
+            {
+                perceptron->weight[i] += perceptron->global_history_table[i];
+            }
+            else
+            {
+                perceptron->weight[i] += perceptron->global_history_table[i] * (-1);
+            }
+        }
+    }
 }
 
 int checkPowerofTwo(unsigned x)

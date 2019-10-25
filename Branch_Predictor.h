@@ -11,7 +11,8 @@
 
 // Predictor type
 //#define TWO_BIT_LOCAL
-#define GSHARE
+//#define GSHARE
+#define PERCEPTRON
 //#define TOURNAMENT
 
 // saturating counter
@@ -21,6 +22,14 @@ typedef struct Sat_Counter
     uint8_t max_val;
     uint8_t counter;
 }Sat_Counter;
+
+// perceptron
+typedef struct Perceptron
+{
+    signed int *global_history_table;
+    signed int *weight;
+    float y_out;
+}Perceptron;
 
 typedef struct Branch_Predictor
 {
@@ -36,6 +45,13 @@ typedef struct Branch_Predictor
     unsigned global_predictor_size;
     unsigned global_history_mask;
     Sat_Counter *global_counters;
+    #endif
+
+    #ifdef PERCEPTRON
+    uint64_t global_history;
+    unsigned global_predictor_size;
+    unsigned global_history_mask;
+    Perceptron *perceptron_table;
     #endif
 
     #ifdef TOURNAMENT
@@ -73,6 +89,11 @@ bool predict(Branch_Predictor *branch_predictor, Instruction *instr);
 
 unsigned getIndex(uint64_t branch_addr, unsigned index_mask);
 bool getPrediction(Sat_Counter *sat_counter);
+
+// Perceptron functions
+void initPerceptron(Perceptron *perceptron);
+void compute_perceptron(Perceptron *perceptron);
+void train_perceptron(Perceptron* perceptron, bool taken, float theta, float y);
 
 // Utility
 int checkPowerofTwo(unsigned x);
